@@ -1,0 +1,33 @@
+name: 墨水屏综合看板推送
+
+on:
+  schedule:
+    - cron: '18 * * * *'  # 每小时运行一次
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 获取代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖包
+        run: pip install requests pillow zhdate
+
+      - name: 运行！生成图片并推送
+        env:
+          ZECTRIX_API_KEY: ${{ secrets.ZECTRIX_API_KEY }}
+          ZECTRIX_MAC: ${{ secrets.ZECTRIX_MAC }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AMAP_WEATHER_KEY: ${{ secrets.AMAP_WEATHER_KEY }}
+        run: python main.py
