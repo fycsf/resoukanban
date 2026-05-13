@@ -15,7 +15,7 @@ from zhdate import ZhDate
 ENABLED_PAGES = "1,2,3,4"
 
 # 2. 热搜源设置：目前支持 'zhihu', 'bilibili', 'github'
-HOTLIST_SOURCE = "bilibili"  # 在这里修改你想看的热搜源
+HOTLIST_SOURCE = "github"  # 在这里修改你想看的热搜源
 
 # 3. 天气城市设置
 # 高德天气城市代码（默认：天津市津南区 120112，北京是 110000）
