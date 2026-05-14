@@ -443,3 +443,18 @@ if __name__ == "__main__":
     task_weather_dashboard()
         
     print("🎉 所有任务执行完毕！")
+
+import os
+from datetime import datetime
+
+# 在 main.py 末尾，推送图片成功后执行：
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+with open("last_run.txt", "w", encoding="utf-8") as f:
+    f.write(f"Last run: {timestamp}\n")
+
+# 然后用 git 提交这个文件
+os.system("git config user.name 'github-actions'")
+os.system("git config user.email 'github-actions@github.com'")
+os.system("git add last_run.txt")
+os.system(f"git commit -m 'auto: update last_run at {timestamp}'")
+os.system("git push")
