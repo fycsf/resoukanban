@@ -19,25 +19,29 @@ HOTLIST_SOURCE = "bilibili"  # 在这里修改你想看的热搜源
 
 # 3. 天气城市设置
 # 高德天气城市代码（默认：天津市津南区 120112，北京是 110000）
-CITY_ADCODE = "330102"                      
+CITY_ADCODE = "330102"
 
 # 日出日落位置（支持拼音，如 "Beijing" 或 "Haidian,Beijing"）
-WTTR_LOCATION = "Shangcheng,Hangzhou"            
+WTTR_LOCATION = "Shangcheng,Hangzhou"
 
 # 4. 屏幕显示文字
 # 天气页面左上角的自定义标题，你可以改成 "北京市 | 我的温馨小窝" 等等
-CITY_DISPLAY_NAME = "上城区 | 市民中心打工地"      
+CITY_DISPLAY_NAME = "上城区 | 市民中心打工地"
 
 
 # =====================================================================
 # 🔒 第二部分：核心密钥区（⚠️绝对不要改这里，请在 GitHub Secrets 里配置） 🔒
 # =====================================================================
 API_KEY = os.environ.get("ZECTRIX_API_KEY")
-MAC_ADDRESS = os.environ.get("ZECTRIX_MAC")
 AMAP_KEY = os.environ.get("AMAP_WEATHER_KEY")
 
-# 接口地址（自动拼接）
-PUSH_URL = f"https://cloud.zectrix.com/open/v1/devices/{MAC_ADDRESS}/display/image"
+# 支持多台设备，从环境变量读取所有 MAC 地址
+MAC_LIST = [
+    os.environ.get("ZECTRIX_MAC_1"),
+    os.environ.get("ZECTRIX_MAC_2"),
+]
+# 过滤掉未配置的设备
+MAC_LIST = [m for m in MAC_LIST if m]
 
 
 # =====================================================================
@@ -81,20 +85,24 @@ def get_clothing_advice(temp):
     except:
         return "请根据实际体感气温调整着装。"
 
-def push_image(img, page_id):
+def push_image(img, page_id, mac):
     if str(page_id) not in ENABLED_PAGES:
         print(f"⏩ Page {page_id} 未启用，跳过推送。")
         return
-        
+
     img.save(f"page_{page_id}.png")
     api_headers = {"X-API-Key": API_KEY}
     files = {"images": (f"page_{page_id}.png", open(f"page_{page_id}.png", "rb"), "image/png")}
     data = {"dither": "true", "pageId": str(page_id)}
+
+    # 每台设备独立的推送地址
+    push_url = f"https://cloud.zectrix.com/open/v1/devices/{mac}/display/image"
+
     try:
-        res = requests.post(PUSH_URL, headers=api_headers, files=files, data=data)
-        print(f"✅ Page {page_id} 推送成功: {res.status_code}")
+        res = requests.post(push_url, headers=api_headers, files=files, data=data)
+        print(f"✅ Page {page_id} → {mac} 推送成功: {res.status_code}")
     except Exception as e:
-        print(f"❌ Page {page_id} 推送失败: {e}")
+        print(f"❌ Page {page_id} → {mac} 推送失败: {e}")
 
 # --- 节气与农历 ---
 def get_solar_term(year, month, day):
@@ -176,10 +184,10 @@ def get_hotlist_data(source):
 
 
 # --- 任务：热搜看板 ---
-def task_hotlist():
+def task_hotlist(mac):
     if "1" not in ENABLED_PAGES and "2" not in ENABLED_PAGES:
         return
-        
+
     source_map = {"zhihu": "知乎热榜", "bilibili": "B站热搜", "github": "GitHub 热门"}
     titles = get_hotlist_data(HOTLIST_SOURCE)
     title_display = source_map.get(HOTLIST_SOURCE, "热门看板")
@@ -195,7 +203,7 @@ def task_hotlist():
                 w = draw.textlength(test_line, font=font)
             except AttributeError:
                 w = draw.textbbox((0,0), test_line, font=font)[2]
-                
+
             if w <= max_width:
                 current_line = test_line
             else:
@@ -208,61 +216,58 @@ def task_hotlist():
     def draw_list(draw, page_title, items, start_idx):
         draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
         draw.text((20, 15), page_title, font=font_title, fill=255)
-        
+
         y, last_idx = 55, start_idx
         item_gap = 12       # 条目间距
         line_height = 23    # 18号字的行高
-        
+
         for i in range(start_idx, len(items)):
             # 屏幕总宽400，文字从X=45开始，右边留白15，所以最大像素宽度是 340
-            lines = wrap_text_by_pixels(draw, items[i], font_item, max_width=340) 
-            
+            lines = wrap_text_by_pixels(draw, items[i], font_item, max_width=340)
+
             required_h = len(lines) * line_height
-            if y + required_h > 295: 
+            if y + required_h > 295:
                 break
-            
+
             current_num = i + 1
-            
+
             # 左侧黑底数字序号框 (适配 18 号字)
             draw.rounded_rectangle([(10, y), (36, y+24)], radius=6, fill=0)
             num_x = 18 if current_num < 10 else 11
             draw.text((num_x, y+3), str(current_num), font=font_small, fill=255)
-            
+
             curr_y = y + 1
             for line in lines:
                 draw.text((45, curr_y), line, font=font_item, fill=0)
                 curr_y += line_height
-                
+
             y += max(24, required_h) + item_gap
             last_idx = i + 1
-            
+
             # 画分割线
             if y < 290:
                 draw.line([(45, y - item_gap/2), (380, y - item_gap/2)], fill=0, width=1)
-                
+
         return last_idx
 
     next_s = 0
     if "1" in ENABLED_PAGES:
         print("生成 Page 1: 热搜 (上)...")
-        # 🔧修改点 1：将 '1' 改为 'L'
         img1 = Image.new('1', (400, 300), color=255)
         next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", titles, 0)
-        push_image(img1, 1)
+        push_image(img1, 1, mac)
 
     if "2" in ENABLED_PAGES:
         print("生成 Page 2: 热搜 (下)...")
-        # 🔧修改点 2：将 '1' 改为 'L'
         img2 = Image.new('1', (400, 300), color=255)
         start_index = next_s if "1" in ENABLED_PAGES else 7
         draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", titles, start_index)
-        push_image(img2, 2)
+        push_image(img2, 2, mac)
 
-# --- 任务：日历（保持不变） ---
-def task_calendar():
+# --- 任务：日历 ---
+def task_calendar(mac):
     if "3" not in ENABLED_PAGES: return
     print("生成 Page 3: 日历...")
-    # 🔧修改点 3：将 '1' 改为 'L'
     img = Image.new('1', (400, 300), color=255)
     draw = ImageDraw.Draw(img)
     now_utc = datetime.utcnow()
@@ -297,16 +302,16 @@ def task_calendar():
                     else:
                         draw.text((dx+2, curr_y+18), bottom_text, font=font_tiny, fill=0)
         curr_y += row_h
-    push_image(img, 3)
+    push_image(img, 3, mac)
 
 # --- 混合天气获取（保持不变） ---
 def get_hybrid_weather():
     result = {
-        "city": CITY_DISPLAY_NAME.split("|")[0].strip(), "weather": "未知", "temp_curr": 0, 
-        "temp_low": 0, "temp_high": 0, "wind_info": "无数据", "humidity": "0%", 
+        "city": CITY_DISPLAY_NAME.split("|")[0].strip(), "weather": "未知", "temp_curr": 0,
+        "temp_low": 0, "temp_high": 0, "wind_info": "无数据", "humidity": "0%",
         "feel_temp": "N/A", "sunrise": "--:--", "sunset": "--:--", "forecasts": []
     }
-    
+
     if not AMAP_KEY:
         print("⚠️ 未设置 AMAP_WEATHER_KEY，无法获取高德数据")
         return result
@@ -373,21 +378,20 @@ def get_hybrid_weather():
     return result
 
 # --- 任务：天气看板 ---
-def task_weather_dashboard():
+def task_weather_dashboard(mac):
     if "4" not in ENABLED_PAGES: return
     print("生成 Page 4: 混合天气看板...")
-    # 🔧修改点 4：将 '1' 改为 'L'
     img = Image.new('1', (400, 300), color=255)
     draw = ImageDraw.Draw(img)
 
     weather = get_hybrid_weather()
     if weather["temp_curr"] == 0 and not weather["forecasts"]:
         draw.text((20, 50), "天气数据获取失败，请检查 API Key 或网络", font=font_item, fill=0)
-        push_image(img, 4)
+        push_image(img, 4, mac)
         return
 
     draw.text((20, 10), CITY_DISPLAY_NAME, font=font_title, fill=0)
-    
+
     now_beijing = datetime.utcnow() + timedelta(hours=8)
     update_time = now_beijing.strftime("%H:%M")
     time_text = f"更新: {update_time}"
@@ -403,8 +407,7 @@ def task_weather_dashboard():
     draw.text((150, 45), f"{weather['weather']}", font=font_36, fill=0)
 
     draw.rounded_rectangle([(235, 45), (385, 130)], radius=8, outline=0, fill=0)
-    
-    # 🔧修改点 5：调整右侧黑框内文字位置使其居中 (X 从 245 移到 255，Y 轴均匀排开)
+
     draw.text((255, 56), f"{weather['wind_info']}", font=font_small, fill=255)
     draw.text((255, 80), f"湿度 {weather['humidity']}", font=font_small, fill=255)
     draw.text((255, 104), f"体感 {weather['feel_temp']}", font=font_small, fill=255)
@@ -425,36 +428,22 @@ def task_weather_dashboard():
     for i, line in enumerate(advice_lines[:2]):
         draw.text((20, 262 + i*24), f"[衣] {line}", font=font_item, fill=0)
 
-    push_image(img, 4)
+    push_image(img, 4, mac)
 
 # ================= 主程序 =================
 if __name__ == "__main__":
-    if not API_KEY or not MAC_ADDRESS:
-        print("❌ 错误: 请先在 GitHub Secrets 中配置 ZECTRIX_API_KEY 和 ZECTRIX_MAC")
+    if not API_KEY or not MAC_LIST:
+        print("❌ 错误: 请先在 GitHub Secrets 中配置 ZECTRIX_API_KEY 和至少一个 ZECTRIX_MAC")
         exit(1)
-        
-    print("🚀 开始执行墨水屏推送任务...")
-    
-    # 执行热搜任务
-    task_hotlist()
-    # 执行日历任务
-    task_calendar()
-    # 执行天气任务
-    task_weather_dashboard()
-        
-    print("🎉 所有任务执行完毕！")
 
-import os
-from datetime import datetime
+    print(f"🚀 开始执行墨水屏推送任务，共 {len(MAC_LIST)} 台设备...")
 
-# 在 main.py 末尾，推送图片成功后执行：
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-with open("last_run.txt", "w", encoding="utf-8") as f:
-    f.write(f"Last run: {timestamp}\n")
+    for mac in MAC_LIST:
+        print(f"
+📱 正在推送到设备: {mac}")
+        task_hotlist(mac)
+        task_calendar(mac)
+        task_weather_dashboard(mac)
 
-# 然后用 git 提交这个文件
-os.system("git config user.name 'github-actions'")
-os.system("git config user.email 'github-actions@github.com'")
-os.system("git add last_run.txt")
-os.system(f"git commit -m 'auto: update last_run at {timestamp}'")
-os.system("git push")
+    print("
+🎉 所有设备推送完毕！")
