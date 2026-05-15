@@ -2,8 +2,9 @@ name: 墨水屏综合看板推送
 
 on:
   schedule:
-    - cron: '42 0,4,8,12 * * *'    # 北京8点、12点、16点、20点
-    - cron: '22 2,6,10,14 * * *'   # 北京10点、14点、18点、22点（保底）
+    - cron: '42 0,4,8,12 * * *'    # 北京 8:42 / 12:42 / 16:42/ 20:42
+    - cron: '42 2,6,10,14 * * *'   # 北京 10:42 / 14:42 / 18:42/ 22:42
+
   workflow_dispatch:
 
 jobs:
@@ -13,12 +14,12 @@ jobs:
       contents: write
     steps:
       - name: 获取代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: 安装 Python 环境
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
