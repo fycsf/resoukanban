@@ -439,11 +439,11 @@ if __name__ == "__main__":
     print(f"🚀 开始执行墨水屏推送任务，共 {len(MAC_LIST)} 台设备...")
 
     for mac in MAC_LIST:
-        print(f"
-📱 正在推送到设备: {mac}")
+        print()
+        print(f"📱 正在推送到设备: {mac}")
         task_hotlist(mac)
         task_calendar(mac)
         task_weather_dashboard(mac)
 
-    print("
-🎉 所有设备推送完毕！")
+    print()
+    print("🎉 所有设备推送完毕！")
