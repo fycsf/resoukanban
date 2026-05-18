@@ -19,16 +19,16 @@ DEVICES = [
         "city_adcode": "330102",
         "wttr_location": "Shangcheng,Hangzhou",
         "city_display": "上城区 | 市民中心打工地",
-        "hotlist_source": "weibo",       # ✅ 微博热搜，简介精炼
+        "hotlist_source": "bilibili",    # ✅ B站热搜，简洁词条
     },
     {
         "mac_env": "ZECTRIX_MAC_2",
         "name": "家庭屏",
-        "pages": "1,2,3,4",
+        "pages": "3,4",
         "city_adcode": "330106",
-        "wttr_location": "Xihucheng,Hangzhou",
+        "wttr_location": "Xihu,Hangzhou",
         "city_display": "西湖区 | 文萃苑的家",
-        "hotlist_source": "weibo",
+        "hotlist_source": "bilibili",
     },
 ]
 
@@ -92,7 +92,7 @@ def push_image(img, page_id, mac, device_name):
         print(f"   ❌ Page {page_id} 推送异常: {e}")
         return False
 
-# --- 按像素宽度自动换行 ---
+# --- 按像素宽度自动换行（标题用） ---
 def wrap_text_by_width(draw, text, font, max_width):
     if not text:
         return []
@@ -166,175 +166,108 @@ def get_lunar_or_festival(y, m, d):
     except:
         return ""
 
-# --- 精简摘要：强制30字以内，优先取前半句 ---
-def short_summary(text, max_chars=30):
-    if not text:
-        return ""
-    text = re.sub(r'<[^>]+>', '', text).strip()
-    text = re.sub(r'\s+', ' ', text)
-    if len(text) <= max_chars:
-        return text
-    # 在max_chars范围内找最后一个标点截断
-    truncated = text[:max_chars]
-    for punct in '，、；：,;':
-        pos = truncated.rfind(punct)
-        if pos > max_chars * 0.4:  # 至少保留40%
-            return truncated[:pos+1]
-    # 找不到标点就截断加省略号
-    return truncated[:-1] + "…"
-
-# --- 获取热搜数据（新版：微博为主，简介精炼） ---
+# --- 获取热搜数据（B站热搜，无简介） ---
 def get_hotlist_data(source):
     items = []
     print(f"   正在从 {source} 获取数据...")
 
     try:
-        if source == "weibo":
-            # ✅ 微博热搜：note字段就是一句话简介，长度适中
-            url = "https://weibo.com/ajax/side/hotSearch"
+        if source == "bilibili":
+            url = "https://api.bilibili.com/x/web-interface/wbi/search/square?limit=20"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
-            realtime = res.get("data", {}).get("realtime", [])
-            for item in realtime[:10]:
-                word = item.get("word", "无标题")
-                # 去掉微博话题的#号
-                word = word.replace("#", "")
-                note = item.get("note", "")
-                # 微博note通常很短，如果太长再截断
-                excerpt = short_summary(note, max_chars=32)
-                # 如果note为空，用category代替
-                if not excerpt:
-                    category = item.get("category", "")
-                    excerpt = f"[{category}]" if category else ""
-                items.append({"title": word, "excerpt": excerpt})
-            if not items:
-                print("   ⚠️ 微博热榜未获取到数据，尝试fallback到知乎...")
-                source = "zhihu"
+            for item in res.get('data', {}).get('trending', {}).get('list', [])[:12]:
+                title = item.get('show_name', '无标题')
+                items.append({"title": title, "excerpt": ""})  # 无简介
 
-        if source == "zhihu" or (source == "weibo" and not items):
-            # 知乎热榜：excerpt截断到30字
+        elif source == "zhihu":
             url = "https://api.zhihu.com/topstory/hot-list"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
-            for item in res.get('data', [])[:10]:
+            for item in res.get('data', [])[:12]:
                 target = item.get('target', {})
                 title = target.get('title', '无标题')
-                excerpt = target.get('excerpt', '') or target.get('detail_text', '')
-                excerpt = short_summary(excerpt, max_chars=30)
-                items.append({"title": title, "excerpt": excerpt})
+                items.append({"title": title, "excerpt": ""})
 
         elif source == "baidu":
-            # 百度：只取desc前半句，30字以内
-            url = "https://top.baidu.com/api/board?platform=wise&tab=realtime&limit=10"
+            url = "https://top.baidu.com/api/board?platform=wise&tab=realtime&limit=12"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
             if res.get("errno") == 0:
                 cards = res.get("data", {}).get("cards", [])
                 for card in cards:
                     if card.get("component") == "list":
-                        for item in card.get("content", [])[:10]:
+                        for item in card.get("content", [])[:12]:
                             title = item.get("word", item.get("query", "无标题"))
-                            desc = item.get("desc", "")
-                            if not desc:
-                                content_list = item.get("content", [])
-                                if content_list and isinstance(content_list, list):
-                                    first = content_list[0]
-                                    if isinstance(first, dict):
-                                        desc = first.get("text", "")
-                            excerpt = short_summary(desc, max_chars=30)
-                            items.append({"title": title, "excerpt": excerpt})
+                            items.append({"title": title, "excerpt": ""})
                         break
-
-        elif source == "bilibili":
-            url = "https://api.bilibili.com/x/web-interface/wbi/search/square?limit=20"
-            res = requests.get(url, headers=HEADERS, timeout=10).json()
-            for item in res.get('data', {}).get('trending', {}).get('list', [])[:10]:
-                title = item.get('show_name', '无标题')
-                items.append({"title": title, "excerpt": ""})
 
         elif source == "github":
             date_str = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
             url = f"https://api.github.com/search/repositories?q=stars:>500+created:>{date_str}&sort=stars&order=desc"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
-            for item in res.get('items', [])[:10]:
+            for item in res.get('items', [])[:12]:
                 title = item.get('full_name', 'unknown')
-                desc = item.get('description', '') or 'No description'
-                excerpt = short_summary(desc, max_chars=30)
-                items.append({"title": title, "excerpt": excerpt})
+                items.append({"title": title, "excerpt": ""})
 
         if not items:
-            items = [{"title": "暂无热点数据", "excerpt": "请检查网络或稍后重试"}] * 4
+            items = [{"title": "暂无热点数据", "excerpt": ""}] * 6
 
     except Exception as e:
         print(f"   ⚠️ 获取失败: {e}")
-        items = [{"title": "数据获取失败", "excerpt": "请检查网络或更换热搜源"}] * 4
+        items = [{"title": "数据获取失败", "excerpt": ""}] * 6
 
     return items
 
-# --- 任务：热搜看板（新版：每页4条，标题2行+简介1行） ---
+# --- 任务：热搜看板（美化版：每页6条，无简介，精致排版） ---
 def task_hotlist(mac, enabled_pages, source, device_name):
     if "1" not in enabled_pages and "2" not in enabled_pages:
         return 0, 0
 
     source_map = {
-        "weibo": "微博热搜",
+        "bilibili": "B站热搜",
         "zhihu": "知乎热榜",
         "baidu": "百度热点",
-        "bilibili": "B站热搜",
         "github": "GitHub 热门"
     }
     items = get_hotlist_data(source)
     title_display = source_map.get(source, "热门看板")
 
     def draw_list(draw, page_title, items, start_idx):
-        # 顶部标题栏
-        draw.rounded_rectangle([(10, 8), (390, 42)], radius=8, fill=0)
+        # 顶部标题栏（圆角黑底）
+        draw.rounded_rectangle([(10, 8), (390, 40)], radius=6, fill=0)
         draw.text((20, 12), page_title, font=font_title, fill=255)
 
-        y = 48
+        y = 46
         last_idx = start_idx
-        item_height = 62  # 4条 × 62 = 248，从y=48到y=296，底部留白4px
+        item_height = 42  # 6条 × 42 = 252，顶部40 + 252 = 292，底部留白8px
 
         for i in range(start_idx, len(items)):
-            if y + 55 > 298:
+            if y + 38 > 296:
                 break
 
             current_num = i + 1
             item = items[i]
 
-            # 左侧序号黑底圆角框（高50px）
-            draw.rounded_rectangle([(10, y), (38, y + 50)], radius=6, fill=0)
-            num_x = 17 if current_num < 10 else 10
-            draw.text((num_x, y + 16), str(current_num), font=font_small, fill=255)
+            # 序号：精致圆角矩形，28×28px，黑底白字，垂直居中
+            box_y = y + 6  # 在42px条目中垂直居中：(42-28)/2 = 7，取6
+            draw.rounded_rectangle([(12, box_y), (40, box_y + 28)], radius=5, fill=0)
+            num_x = 19 if current_num < 10 else 12
+            draw.text((num_x, box_y + 6), str(current_num), font=font_small, fill=255)
 
-            # 标题：18号字，最多2行
-            title_lines = wrap_text_by_width(draw, item.get("title", ""), font_item, 340)
+            # 标题：18号字，自动换行最多2行，按像素截断
+            title = item.get("title", "")
+            title_lines = wrap_text_by_width(draw, title, font_item, 340)  # 400-48(序号区)-12(右边距)
             title_lines = title_lines[:2]
-            title_y = y + 2
+            
+            title_y = y + 4
             for line in title_lines:
-                draw.text((45, title_y), line, font=font_item, fill=0)
-                title_y += 22
+                draw.text((48, title_y), line, font=font_item, fill=0)
+                title_y += 22  # 18号字行高约22px
 
-            # 简介：11号字，固定1行（已用short_summary保证30字以内）
-            excerpt = item.get("excerpt", "")
-            if excerpt:
-                # 再次确保不超宽
-                truncated = ""
-                for char in excerpt:
-                    test = truncated + char
-                    try:
-                        w = draw.textlength(test, font=font_tiny)
-                    except:
-                        w = len(test) * 11
-                    if w > 340:
-                        truncated += "…"
-                        break
-                    truncated += char
-                # 简介放在标题下方，y + 2 + 行数*22 + 2
-                excerpt_y = y + 2 + len(title_lines) * 22 + 2
-                draw.text((45, excerpt_y), truncated, font=font_tiny, fill=0)
-
-            # 条目分隔线（除最后一条）
-            if i < start_idx + 3 and i < len(items) - 1:
-                line_y = y + item_height - 3
-                draw.line([(45, line_y), (390, line_y)], fill=0, width=1)
+            # 条目分隔虚线（最后一条不加）
+            if i < start_idx + 5 and i < len(items) - 1:
+                sep_y = y + item_height - 2
+                # 画虚线：点-空-点-空
+                for x in range(48, 390, 6):
+                    draw.line([(x, sep_y), (x+3, sep_y)], fill=0, width=1)
 
             y += item_height
             last_idx = i + 1
@@ -345,16 +278,16 @@ def task_hotlist(mac, enabled_pages, source, device_name):
     next_s = 0
 
     if "1" in enabled_pages:
-        print(f"   生成 Page 1: 热点 (上 1-4)...")
+        print(f"   生成 Page 1: 热搜 (上 1-6)...")
         img1 = Image.new('1', (400, 300), color=255)
         next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", items, 0)
         if push_image(img1, 1, mac, device_name):
             success_count += 1
 
     if "2" in enabled_pages:
-        print(f"   生成 Page 2: 热点 (下 5-8)...")
+        print(f"   生成 Page 2: 热搜 (下 7-12)...")
         img2 = Image.new('1', (400, 300), color=255)
-        start_index = next_s if "1" in enabled_pages else 4
+        start_index = next_s if "1" in enabled_pages else 6
         draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", items, start_index)
         if push_image(img2, 2, mac, device_name):
             success_count += 1
@@ -573,7 +506,7 @@ if __name__ == "__main__":
 
         ok, total = 0, 0
 
-        s, t = task_hotlist(mac, pages, dev.get("hotlist_source", "weibo"), name)
+        s, t = task_hotlist(mac, pages, dev.get("hotlist_source", "bilibili"), name)
         ok += s
         total += t
 
