@@ -2,53 +2,46 @@ import os
 import requests
 import calendar
 import re
+import json
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
 from zhdate import ZhDate
 
 # =====================================================================
-# 🌟 第一部分：用户自定义区（想改什么，直接在这里改文字和数字） 🌟
+# 🌟 第一部分：设备配置区（每台设备独立设置） 🌟
 # =====================================================================
 
-# 1. 控制推送哪几页？
-# 墨水屏共 5 页：1=热搜上, 2=热搜下, 3=日历, 4=天气
-ENABLED_PAGES = "1,2,3,4"
-
-# 2. 热搜源设置：目前支持 'zhihu', 'bilibili', 'github'
-HOTLIST_SOURCE = "bilibili"  # 在这里修改你想看的热搜源
-
-# 3. 天气城市设置
-# 高德天气城市代码（默认：天津市津南区 120112，北京是 110000）
-CITY_ADCODE = "330102"
-
-# 日出日落位置（支持拼音，如 "Beijing" 或 "Haidian,Beijing"）
-WTTR_LOCATION = "Shangcheng,Hangzhou"
-
-# 4. 屏幕显示文字
-# 天气页面左上角的自定义标题，你可以改成 "北京市 | 我的温馨小窝" 等等
-CITY_DISPLAY_NAME = "上城区 | 市民中心打工地"
-
+DEVICES = [
+    {
+        "mac_env": "ZECTRIX_MAC_1",
+        "name": "办公室屏",
+        "pages": "1,2,3,4",
+        "city_adcode": "330102",
+        "wttr_location": "Shangcheng,Hangzhou",
+        "city_display": "上城区 | 市民中心打工地",
+        "hotlist_source": "baidu",       # ✅ 权威新闻热点
+    },
+    {
+        "mac_env": "ZECTRIX_MAC_2",
+        "name": "家庭屏",
+        "pages": "1,2,3,4",
+        "city_adcode": "110000",
+        "wttr_location": "Beijing",
+        "city_display": "北京 | 办公室",
+        "hotlist_source": "baidu",
+    },
+]
 
 # =====================================================================
-# 🔒 第二部分：核心密钥区（⚠️绝对不要改这里，请在 GitHub Secrets 里配置） 🔒
+# 🔒 第二部分：核心密钥区 🔒
 # =====================================================================
 API_KEY = os.environ.get("ZECTRIX_API_KEY")
 AMAP_KEY = os.environ.get("AMAP_WEATHER_KEY")
 
-# 支持多台设备，从环境变量读取所有 MAC 地址
-MAC_LIST = [
-    os.environ.get("ZECTRIX_MAC_1"),
-    os.environ.get("ZECTRIX_MAC_2"),
-]
-# 过滤掉未配置的设备
-MAC_LIST = [m for m in MAC_LIST if m]
-
-
 # =====================================================================
-# ⚙️ 第三部分：底层运行逻辑（如果没有报错，不需要修改以下代码） ⚙️
+# ⚙️ 第三部分：底层运行逻辑 ⚙️
 # =====================================================================
 
-# --- 字体设置 ---
 FONT_PATH = "font.ttf"
 try:
     font_huge = ImageFont.truetype(FONT_PATH, 65)
@@ -62,17 +55,13 @@ except:
     print("❌ 错误: 找不到 font.ttf")
     exit(1)
 
-# 使用更通用的请求头
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+}
 
 # --- 工具函数 ---
-def get_wrapped_lines(text, max_chars=18):
-    lines = []
-    while text:
-        lines.append(text[:max_chars])
-        text = text[max_chars:]
-    return lines
-
 def get_clothing_advice(temp):
     try:
         t = int(temp)
@@ -85,24 +74,23 @@ def get_clothing_advice(temp):
     except:
         return "请根据实际体感气温调整着装。"
 
-def push_image(img, page_id, mac):
-    if str(page_id) not in ENABLED_PAGES:
-        print(f"⏩ Page {page_id} 未启用，跳过推送。")
-        return
-
-    img.save(f"page_{page_id}.png")
+def push_image(img, page_id, mac, device_name):
+    img.save(f"page_{page_id}_{mac[-4:]}.png")
     api_headers = {"X-API-Key": API_KEY}
-    files = {"images": (f"page_{page_id}.png", open(f"page_{page_id}.png", "rb"), "image/png")}
+    files = {"images": (f"page_{page_id}.png", open(f"page_{page_id}_{mac[-4:]}.png", "rb"), "image/png")}
     data = {"dither": "true", "pageId": str(page_id)}
-
-    # 每台设备独立的推送地址
     push_url = f"https://cloud.zectrix.com/open/v1/devices/{mac}/display/image"
-
     try:
-        res = requests.post(push_url, headers=api_headers, files=files, data=data)
-        print(f"✅ Page {page_id} → {mac} 推送成功: {res.status_code}")
+        res = requests.post(push_url, headers=api_headers, files=files, data=data, timeout=30)
+        if res.status_code == 200:
+            print(f"   ✅ Page {page_id} 推送成功")
+            return True
+        else:
+            print(f"   ❌ Page {page_id} 推送失败: HTTP {res.status_code}")
+            return False
     except Exception as e:
-        print(f"❌ Page {page_id} → {mac} 推送失败: {e}")
+        print(f"   ❌ Page {page_id} 推送异常: {e}")
+        return False
 
 # --- 节气与农历 ---
 def get_solar_term(year, month, day):
@@ -156,118 +144,181 @@ def get_lunar_or_festival(y, m, d):
     except:
         return ""
 
-# --- 获取数据的逻辑 (支持切换源) ---
+# --- 获取热搜数据（新版：权威新闻源） ---
 def get_hotlist_data(source):
-    titles = []
-    print(f"正在从 {source} 获取数据...")
+    items = []  # 每个元素: {"title": "...", "excerpt": "..."}
+    print(f"   正在从 {source} 获取数据...")
+
     try:
-        if source == "zhihu":
+        if source == "baidu":
+            # ✅ 百度实时热点：权威新闻聚合，带新闻导语
+            url = "https://top.baidu.com/api/board?platform=wise&tab=realtime&limit=12"
+            res = requests.get(url, headers=HEADERS, timeout=10).json()
+
+            if res.get("errno") == 0:
+                cards = res.get("data", {}).get("cards", [])
+                for card in cards:
+                    if card.get("component") == "list":
+                        for item in card.get("content", [])[:12]:
+                            title = item.get("word", item.get("query", "无标题"))
+                            # 获取新闻简介
+                            desc = item.get("desc", "")
+                            if not desc:
+                                content_list = item.get("content", [])
+                                if content_list and isinstance(content_list, list):
+                                    first = content_list[0]
+                                    if isinstance(first, dict):
+                                        desc = first.get("text", "")
+                                    else:
+                                        desc = str(first)
+                            # 清理HTML标签并截断
+                            desc = re.sub(r'<[^>]+>', '', desc).strip()
+                            if len(desc) > 40:
+                                desc = desc[:38] + "…"
+                            items.append({"title": title, "excerpt": desc})
+                        break
+            if not items:
+                print("   ⚠️ 百度热榜未获取到数据，尝试fallback到知乎...")
+                source = "zhihu"
+
+        if source == "zhihu" or (source == "baidu" and not items):
+            # 知乎热榜：问答摘要，fallback备用
             url = "https://api.zhihu.com/topstory/hot-list"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
-            titles = [item['target']['title'] for item in res['data']]
+            for item in res.get('data', [])[:12]:
+                target = item.get('target', {})
+                title = target.get('title', '无标题')
+                excerpt = target.get('excerpt', '') or target.get('detail_text', '')
+                excerpt = re.sub(r'<[^>]+>', '', excerpt).strip()
+                if len(excerpt) > 40:
+                    excerpt = excerpt[:38] + "…"
+                items.append({"title": title, "excerpt": excerpt})
+
         elif source == "bilibili":
             url = "https://api.bilibili.com/x/web-interface/wbi/search/square?limit=20"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
-            titles = [item['show_name'] for item in res['data']['trending']['list']]
+            for item in res.get('data', {}).get('trending', {}).get('list', [])[:12]:
+                title = item.get('show_name', '无标题')
+                items.append({"title": title, "excerpt": ""})
+
         elif source == "github":
-            # GitHub 今日最热门仓库（近7天星标最多）
             date_str = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
             url = f"https://api.github.com/search/repositories?q=stars:>500+created:>{date_str}&sort=stars&order=desc"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
-            titles = [f"{item['full_name']}: {item['description'][:50] if item['description'] else 'No desc'}" for item in res['items']]
-        else:
-            titles = ["不支持的数据源"]
+            for item in res.get('items', [])[:12]:
+                title = item.get('full_name', 'unknown')
+                desc = item.get('description', '') or 'No description'
+                if len(desc) > 40:
+                    desc = desc[:38] + "…"
+                items.append({"title": title, "excerpt": desc})
+
+        if not items:
+            items = [{"title": "暂无热点数据", "excerpt": "请检查网络或稍后重试"}] * 6
+
     except Exception as e:
-        print(f"获取失败: {e}")
-        titles = ["数据获取失败，请检查配置"] * 10
-    return titles[:20]
+        print(f"   ⚠️ 获取失败: {e}")
+        items = [{"title": "数据获取失败", "excerpt": "请检查网络或更换热搜源"}] * 6
 
+    return items
 
-# --- 任务：热搜看板 ---
-def task_hotlist(mac):
-    if "1" not in ENABLED_PAGES and "2" not in ENABLED_PAGES:
-        return
+# --- 任务：热搜看板（每页6条，标题+简介） ---
+def task_hotlist(mac, enabled_pages, source, device_name):
+    if "1" not in enabled_pages and "2" not in enabled_pages:
+        return 0, 0
 
-    source_map = {"zhihu": "知乎热榜", "bilibili": "B站热搜", "github": "GitHub 热门"}
-    titles = get_hotlist_data(HOTLIST_SOURCE)
-    title_display = source_map.get(HOTLIST_SOURCE, "热门看板")
-
-    # 🌟 核心优化：按像素真实宽度计算换行，解决中英文混排留白问题
-    def wrap_text_by_pixels(draw, text, font, max_width):
-        lines = []
-        current_line = ""
-        for char in text:
-            test_line = current_line + char
-            # 测量加上这个字符后的真实像素宽度
-            try:
-                w = draw.textlength(test_line, font=font)
-            except AttributeError:
-                w = draw.textbbox((0,0), test_line, font=font)[2]
-
-            if w <= max_width:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = char
-        if current_line:
-            lines.append(current_line)
-        return lines
+    source_map = {
+        "baidu": "百度热点",
+        "zhihu": "知乎热榜",
+        "bilibili": "B站热搜",
+        "github": "GitHub 热门"
+    }
+    items = get_hotlist_data(source)
+    title_display = source_map.get(source, "热门看板")
 
     def draw_list(draw, page_title, items, start_idx):
+        # 顶部标题栏
         draw.rounded_rectangle([(10, 10), (390, 45)], radius=8, fill=0)
         draw.text((20, 15), page_title, font=font_title, fill=255)
 
-        y, last_idx = 55, start_idx
-        item_gap = 12       # 条目间距
-        line_height = 23    # 18号字的行高
+        y = 55
+        last_idx = start_idx
+        item_height = 46  # 标题24px + 简介14px + 间距8px
 
         for i in range(start_idx, len(items)):
-            # 屏幕总宽400，文字从X=45开始，右边留白15，所以最大像素宽度是 340
-            lines = wrap_text_by_pixels(draw, items[i], font_item, max_width=340)
-
-            required_h = len(lines) * line_height
-            if y + required_h > 295:
+            if y + 40 > 295:
                 break
 
             current_num = i + 1
+            item = items[i]
 
-            # 左侧黑底数字序号框 (适配 18 号字)
-            draw.rounded_rectangle([(10, y), (36, y+24)], radius=6, fill=0)
+            # 左侧序号黑底圆角框
+            draw.rounded_rectangle([(10, y), (36, y + 36)], radius=6, fill=0)
             num_x = 18 if current_num < 10 else 11
-            draw.text((num_x, y+3), str(current_num), font=font_small, fill=255)
+            draw.text((num_x, y + 10), str(current_num), font=font_small, fill=255)
 
-            curr_y = y + 1
-            for line in lines:
-                draw.text((45, curr_y), line, font=font_item, fill=0)
-                curr_y += line_height
+            # 标题（18号字，逐字截断避免溢出）
+            title = item.get("title", "")
+            truncated = ""
+            for char in title:
+                test = truncated + char
+                try:
+                    w = draw.textlength(test, font=font_item)
+                except:
+                    w = len(test) * 18
+                if w > 330:
+                    truncated += "…"
+                    break
+                truncated += char
+            draw.text((45, y + 1), truncated, font=font_item, fill=0)
 
-            y += max(24, required_h) + item_gap
+            # 简介（11号字，新闻导语）
+            excerpt = item.get("excerpt", "")
+            if excerpt:
+                truncated_e = ""
+                for char in excerpt:
+                    test = truncated_e + char
+                    try:
+                        w = draw.textlength(test, font=font_tiny)
+                    except:
+                        w = len(test) * 11
+                    if w > 330:
+                        truncated_e += "…"
+                        break
+                    truncated_e += char
+                draw.text((45, y + 22), truncated_e, font=font_tiny, fill=0)
+
+            y += item_height
             last_idx = i + 1
-
-            # 画分割线
-            if y < 290:
-                draw.line([(45, y - item_gap/2), (380, y - item_gap/2)], fill=0, width=1)
 
         return last_idx
 
+    success_count = 0
     next_s = 0
-    if "1" in ENABLED_PAGES:
-        print("生成 Page 1: 热搜 (上)...")
-        img1 = Image.new('1', (400, 300), color=255)
-        next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", titles, 0)
-        push_image(img1, 1, mac)
 
-    if "2" in ENABLED_PAGES:
-        print("生成 Page 2: 热搜 (下)...")
+    if "1" in enabled_pages:
+        print(f"   生成 Page 1: 热点 (上 1-6)...")
+        img1 = Image.new('1', (400, 300), color=255)
+        next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", items, 0)
+        if push_image(img1, 1, mac, device_name):
+            success_count += 1
+
+    if "2" in enabled_pages:
+        print(f"   生成 Page 2: 热点 (下 7-12)...")
         img2 = Image.new('1', (400, 300), color=255)
-        start_index = next_s if "1" in ENABLED_PAGES else 7
-        draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", titles, start_index)
-        push_image(img2, 2, mac)
+        start_index = next_s if "1" in enabled_pages else 6
+        draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", items, start_index)
+        if push_image(img2, 2, mac, device_name):
+            success_count += 1
+
+    total_pages = len([p for p in enabled_pages if p in ("1","2")])
+    return success_count, total_pages
 
 # --- 任务：日历 ---
-def task_calendar(mac):
-    if "3" not in ENABLED_PAGES: return
-    print("生成 Page 3: 日历...")
+def task_calendar(mac, enabled_pages, device_name):
+    if "3" not in enabled_pages:
+        return 0, 0
+
+    print(f"   生成 Page 3: 日历...")
     img = Image.new('1', (400, 300), color=255)
     draw = ImageDraw.Draw(img)
     now_utc = datetime.utcnow()
@@ -302,23 +353,25 @@ def task_calendar(mac):
                     else:
                         draw.text((dx+2, curr_y+18), bottom_text, font=font_tiny, fill=0)
         curr_y += row_h
-    push_image(img, 3, mac)
 
-# --- 混合天气获取（保持不变） ---
-def get_hybrid_weather():
+    success = push_image(img, 3, mac, device_name)
+    return (1, 1) if success else (0, 1)
+
+# --- 混合天气获取（按设备独立） ---
+def get_hybrid_weather(city_adcode, wttr_location, city_display):
     result = {
-        "city": CITY_DISPLAY_NAME.split("|")[0].strip(), "weather": "未知", "temp_curr": 0,
+        "city": city_display.split("|")[0].strip(), "weather": "未知", "temp_curr": 0,
         "temp_low": 0, "temp_high": 0, "wind_info": "无数据", "humidity": "0%",
         "feel_temp": "N/A", "sunrise": "--:--", "sunset": "--:--", "forecasts": []
     }
 
     if not AMAP_KEY:
-        print("⚠️ 未设置 AMAP_WEATHER_KEY，无法获取高德数据")
+        print("   ⚠️ 未设置 AMAP_WEATHER_KEY")
         return result
 
     # 1. 高德实时
     try:
-        base_url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={CITY_ADCODE}&key={AMAP_KEY}&extensions=base"
+        base_url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={city_adcode}&key={AMAP_KEY}&extensions=base"
         base_resp = requests.get(base_url, timeout=10).json()
         if base_resp.get("status") == "1" and base_resp.get("lives"):
             live = base_resp["lives"][0]
@@ -330,7 +383,6 @@ def get_hybrid_weather():
             wind_num = re.search(r'\d+', wind_power_raw)
             wind_power = wind_num.group(0) if wind_num else "0"
             result["wind_info"] = f"{wind_power}级 {wind_direction}"
-            # 计算体感温度
             try:
                 wind_speed = int(wind_power)
                 if wind_speed <= 1: wind_kmh = 2
@@ -342,55 +394,57 @@ def get_hybrid_weather():
             except:
                 result["feel_temp"] = f"{result['temp_curr']}°C"
     except Exception as e:
-        print(f"❌ 高德实时请求异常: {e}")
+        print(f"   ❌ 高德实时异常: {e}")
 
     # 2. 高德预报
     try:
-        all_url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={CITY_ADCODE}&key={AMAP_KEY}&extensions=all"
+        all_url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={city_adcode}&key={AMAP_KEY}&extensions=all"
         all_resp = requests.get(all_url, timeout=10).json()
         if all_resp.get("status") == "1" and all_resp.get("forecasts"):
             casts = all_resp["forecasts"][0].get("casts", [])
             if len(casts) >= 1:
                 result["temp_low"] = int(casts[0].get("nighttemp", 0))
                 result["temp_high"] = int(casts[0].get("daytemp", 0))
-            for idx in [1, 2]:
-                if idx < len(casts):
-                    day = casts[idx]
-                    result["forecasts"].append({
-                        "date": day.get("date", "")[5:],
-                        "weather": day.get("dayweather", "未知"),
-                        "temp_low": int(day.get("nighttemp", 0)),
-                        "temp_high": int(day.get("daytemp", 0))
-                    })
+                for idx in [1, 2]:
+                    if idx < len(casts):
+                        day = casts[idx]
+                        result["forecasts"].append({
+                            "date": day.get("date", "")[5:],
+                            "weather": day.get("dayweather", "未知"),
+                            "temp_low": int(day.get("nighttemp", 0)),
+                            "temp_high": int(day.get("daytemp", 0))
+                        })
     except Exception as e:
-        print(f"❌ 高德预报请求异常: {e}")
+        print(f"   ❌ 高德预报异常: {e}")
 
     # 3. wttr.in 日出日落
     try:
-        wttr_url = f"https://wttr.in/{WTTR_LOCATION}?format=j1&lang=zh"
+        wttr_url = f"https://wttr.in/{wttr_location}?format=j1&lang=zh"
         wttr_resp = requests.get(wttr_url, timeout=15).json()
         astro = wttr_resp['weather'][0]['astronomy'][0]
         result["sunrise"] = astro['sunrise']
         result["sunset"] = astro['sunset']
     except Exception as e:
-        print(f"❌ wttr.in 请求异常: {e}")
+        print(f"   ❌ wttr.in 异常: {e}")
 
     return result
 
 # --- 任务：天气看板 ---
-def task_weather_dashboard(mac):
-    if "4" not in ENABLED_PAGES: return
-    print("生成 Page 4: 混合天气看板...")
+def task_weather_dashboard(mac, enabled_pages, city_adcode, wttr_location, city_display, device_name):
+    if "4" not in enabled_pages:
+        return 0, 0
+
+    print(f"   生成 Page 4: 天气 ({city_display})...")
     img = Image.new('1', (400, 300), color=255)
     draw = ImageDraw.Draw(img)
 
-    weather = get_hybrid_weather()
+    weather = get_hybrid_weather(city_adcode, wttr_location, city_display)
     if weather["temp_curr"] == 0 and not weather["forecasts"]:
-        draw.text((20, 50), "天气数据获取失败，请检查 API Key 或网络", font=font_item, fill=0)
-        push_image(img, 4, mac)
-        return
+        draw.text((20, 50), "天气数据获取失败，请检查 API Key", font=font_item, fill=0)
+        success = push_image(img, 4, mac, device_name)
+        return (1, 1) if success else (0, 1)
 
-    draw.text((20, 10), CITY_DISPLAY_NAME, font=font_title, fill=0)
+    draw.text((20, 10), city_display, font=font_title, fill=0)
 
     now_beijing = datetime.utcnow() + timedelta(hours=8)
     update_time = now_beijing.strftime("%H:%M")
@@ -407,14 +461,13 @@ def task_weather_dashboard(mac):
     draw.text((150, 45), f"{weather['weather']}", font=font_36, fill=0)
 
     draw.rounded_rectangle([(235, 45), (385, 130)], radius=8, outline=0, fill=0)
-
     draw.text((255, 56), f"{weather['wind_info']}", font=font_small, fill=255)
     draw.text((255, 80), f"湿度 {weather['humidity']}", font=font_small, fill=255)
     draw.text((255, 104), f"体感 {weather['feel_temp']}", font=font_small, fill=255)
 
-    draw.text((25, 135), f"日出 {weather['sunrise']}   日落 {weather['sunset']}", font=font_item, fill=0)
-
+    draw.text((25, 135), f"日出 {weather['sunrise']} 日落 {weather['sunset']}", font=font_item, fill=0)
     draw.line([(20, 160), (380, 160)], fill=0, width=1)
+
     x_positions = [30, 200]
     for i, day in enumerate(weather['forecasts'][:2]):
         x = x_positions[i]
@@ -428,22 +481,78 @@ def task_weather_dashboard(mac):
     for i, line in enumerate(advice_lines[:2]):
         draw.text((20, 262 + i*24), f"[衣] {line}", font=font_item, fill=0)
 
-    push_image(img, 4, mac)
+    success = push_image(img, 4, mac, device_name)
+    return (1, 1) if success else (0, 1)
 
 # ================= 主程序 =================
 if __name__ == "__main__":
-    if not API_KEY or not MAC_LIST:
-        print("❌ 错误: 请先在 GitHub Secrets 中配置 ZECTRIX_API_KEY 和至少一个 ZECTRIX_MAC")
+    if not API_KEY:
+        print("❌ 错误: 请先在 GitHub Secrets 中配置 ZECTRIX_API_KEY")
         exit(1)
 
-    print(f"🚀 开始执行墨水屏推送任务，共 {len(MAC_LIST)} 台设备...")
+    if not AMAP_KEY:
+        print("⚠️ 警告: 未配置 AMAP_WEATHER_KEY，天气页面将显示无数据")
 
-    for mac in MAC_LIST:
+    print("=" * 50)
+    print("🚀 墨水屏综合看板推送任务启动")
+    print(f"📅 {datetime.utcnow() + timedelta(hours=8)}")
+    print("=" * 50)
+
+    report = []
+
+    for dev in DEVICES:
+        mac = os.environ.get(dev["mac_env"])
+        name = dev.get("name", dev["mac_env"])
+        pages = [p.strip() for p in dev.get("pages", "").split(",") if p.strip()]
+        pages = [p for p in pages if p in ("1", "2", "3", "4")]
+
         print()
-        print(f"📱 正在推送到设备: {mac}")
-        task_hotlist(mac)
-        task_calendar(mac)
-        task_weather_dashboard(mac)
+        mac_display = f"***{mac[-4:]}" if mac else "未配置"
+        print(f"📱 [{name}] MAC: {mac_display}")
+
+        if not mac:
+            print(f"   ⚠️ 环境变量 {dev['mac_env']} 未配置，跳过")
+            report.append({"name": name, "status": "跳过", "reason": "未配置MAC"})
+            continue
+
+        if not pages:
+            print(f"   ⚠️ 未配置推送页面，跳过")
+            report.append({"name": name, "status": "跳过", "reason": "未配置页面"})
+            continue
+
+        print(f"   配置页面: {', '.join(pages)} | 城市: {dev.get('city_display', '未设置')}")
+
+        ok, total = 0, 0
+
+        s, t = task_hotlist(mac, pages, dev.get("hotlist_source", "baidu"), name)
+        ok += s
+        total += t
+
+        s, t = task_calendar(mac, pages, name)
+        ok += s
+        total += t
+
+        s, t = task_weather_dashboard(
+            mac, pages,
+            dev.get("city_adcode", "330102"),
+            dev.get("wttr_location", "Shangcheng,Hangzhou"),
+            dev.get("city_display", "杭州"),
+            name
+        )
+        ok += s
+        total += t
+
+        status = "✅ 成功" if ok == total else ("⚠️ 部分失败" if ok > 0 else "❌ 失败")
+        report.append({"name": name, "status": status, "ok": ok, "total": total})
 
     print()
-    print("🎉 所有设备推送完毕！")
+    print("=" * 50)
+    print("📊 推送汇总报告")
+    print("=" * 50)
+    for r in report:
+        if "ok" in r:
+            print(f"   {r['name']}: {r['status']} ({r['ok']}/{r['total']} 页)")
+        else:
+            print(f"   {r['name']}: {r['status']} - {r.get('reason', '')}")
+    print("=" * 50)
+    print("🎉 任务执行完毕")
