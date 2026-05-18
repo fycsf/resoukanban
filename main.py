@@ -19,16 +19,16 @@ DEVICES = [
         "city_adcode": "330102",
         "wttr_location": "Shangcheng,Hangzhou",
         "city_display": "上城区 | 市民中心打工地",
-        "hotlist_source": "baidu",
+        "hotlist_source": "weibo",       # ✅ 微博热搜，简介精炼
     },
     {
         "mac_env": "ZECTRIX_MAC_2",
         "name": "家庭屏",
         "pages": "1,2,3,4",
         "city_adcode": "330106",
-        "wttr_location": "Xihu,Hangzhou",
+        "wttr_location": "Xihucheng,Hangzhou",
         "city_display": "西湖区 | 文萃苑的家",
-        "hotlist_source": "baidu",
+        "hotlist_source": "weibo",
     },
 ]
 
@@ -92,55 +92,8 @@ def push_image(img, page_id, mac, device_name):
         print(f"   ❌ Page {page_id} 推送异常: {e}")
         return False
 
-# --- 智能摘要：按完整句子提取，保证简介不断词 ---
-def smart_summary(text, max_chars=60):
-    """提取1-2个完整句子作为简介，保证语义完整、不断词"""
-    if not text:
-        return ""
-    # 清理HTML和多余空格
-    text = re.sub(r'<[^>]+>', '', text).strip()
-    text = re.sub(r'\s+', ' ', text)
-    
-    if len(text) <= max_chars:
-        return text
-    
-    # 按中文标点分割成句子
-    sentences = re.split(r'([。！？；.!?])', text)
-    full_sentences = []
-    i = 0
-    while i < len(sentences):
-        s = sentences[i].strip()
-        if i + 1 < len(sentences) and sentences[i+1] in '。！？；.!?':
-            s += sentences[i+1]
-            i += 2
-        else:
-            i += 1
-        if s:
-            full_sentences.append(s)
-    
-    # 取前1-2个句子，总长度不超过max_chars
-    result = ""
-    for s in full_sentences[:2]:
-        if len(result) + len(s) <= max_chars:
-            result += s
-        else:
-            # 如果第一个句子就超长，在max_chars内找最后一个标点截断
-            if not result:
-                truncated = text[:max_chars]
-                # 从末尾往前找标点
-                for punct in '，、；：,;':
-                    pos = truncated.rfind(punct)
-                    if pos > max_chars * 0.5:  # 至少保留一半
-                        return truncated[:pos+1]
-                # 找不到标点就截断加省略号
-                return truncated[:-1] + "…"
-            break
-    
-    return result if result else text[:max_chars-1] + "…"
-
 # --- 按像素宽度自动换行 ---
 def wrap_text_by_width(draw, text, font, max_width):
-    """按像素宽度自动换行，返回多行文本列表"""
     if not text:
         return []
     lines = []
@@ -213,13 +166,63 @@ def get_lunar_or_festival(y, m, d):
     except:
         return ""
 
-# --- 获取热搜数据 ---
+# --- 精简摘要：强制30字以内，优先取前半句 ---
+def short_summary(text, max_chars=30):
+    if not text:
+        return ""
+    text = re.sub(r'<[^>]+>', '', text).strip()
+    text = re.sub(r'\s+', ' ', text)
+    if len(text) <= max_chars:
+        return text
+    # 在max_chars范围内找最后一个标点截断
+    truncated = text[:max_chars]
+    for punct in '，、；：,;':
+        pos = truncated.rfind(punct)
+        if pos > max_chars * 0.4:  # 至少保留40%
+            return truncated[:pos+1]
+    # 找不到标点就截断加省略号
+    return truncated[:-1] + "…"
+
+# --- 获取热搜数据（新版：微博为主，简介精炼） ---
 def get_hotlist_data(source):
     items = []
     print(f"   正在从 {source} 获取数据...")
 
     try:
-        if source == "baidu":
+        if source == "weibo":
+            # ✅ 微博热搜：note字段就是一句话简介，长度适中
+            url = "https://weibo.com/ajax/side/hotSearch"
+            res = requests.get(url, headers=HEADERS, timeout=10).json()
+            realtime = res.get("data", {}).get("realtime", [])
+            for item in realtime[:10]:
+                word = item.get("word", "无标题")
+                # 去掉微博话题的#号
+                word = word.replace("#", "")
+                note = item.get("note", "")
+                # 微博note通常很短，如果太长再截断
+                excerpt = short_summary(note, max_chars=32)
+                # 如果note为空，用category代替
+                if not excerpt:
+                    category = item.get("category", "")
+                    excerpt = f"[{category}]" if category else ""
+                items.append({"title": word, "excerpt": excerpt})
+            if not items:
+                print("   ⚠️ 微博热榜未获取到数据，尝试fallback到知乎...")
+                source = "zhihu"
+
+        if source == "zhihu" or (source == "weibo" and not items):
+            # 知乎热榜：excerpt截断到30字
+            url = "https://api.zhihu.com/topstory/hot-list"
+            res = requests.get(url, headers=HEADERS, timeout=10).json()
+            for item in res.get('data', [])[:10]:
+                target = item.get('target', {})
+                title = target.get('title', '无标题')
+                excerpt = target.get('excerpt', '') or target.get('detail_text', '')
+                excerpt = short_summary(excerpt, max_chars=30)
+                items.append({"title": title, "excerpt": excerpt})
+
+        elif source == "baidu":
+            # 百度：只取desc前半句，30字以内
             url = "https://top.baidu.com/api/board?platform=wise&tab=realtime&limit=10"
             res = requests.get(url, headers=HEADERS, timeout=10).json()
             if res.get("errno") == 0:
@@ -228,7 +231,6 @@ def get_hotlist_data(source):
                     if card.get("component") == "list":
                         for item in card.get("content", [])[:10]:
                             title = item.get("word", item.get("query", "无标题"))
-                            # 获取新闻简介
                             desc = item.get("desc", "")
                             if not desc:
                                 content_list = item.get("content", [])
@@ -236,25 +238,9 @@ def get_hotlist_data(source):
                                     first = content_list[0]
                                     if isinstance(first, dict):
                                         desc = first.get("text", "")
-                                    else:
-                                        desc = str(first)
-                            # 智能摘要：提取1-2个完整句子
-                            excerpt = smart_summary(desc, max_chars=62)
+                            excerpt = short_summary(desc, max_chars=30)
                             items.append({"title": title, "excerpt": excerpt})
                         break
-            if not items:
-                print("   ⚠️ 百度热榜未获取到数据，尝试fallback到知乎...")
-                source = "zhihu"
-
-        if source == "zhihu" or (source == "baidu" and not items):
-            url = "https://api.zhihu.com/topstory/hot-list"
-            res = requests.get(url, headers=HEADERS, timeout=10).json()
-            for item in res.get('data', [])[:10]:
-                target = item.get('target', {})
-                title = target.get('title', '无标题')
-                excerpt = target.get('excerpt', '') or target.get('detail_text', '')
-                excerpt = smart_summary(excerpt, max_chars=62)
-                items.append({"title": title, "excerpt": excerpt})
 
         elif source == "bilibili":
             url = "https://api.bilibili.com/x/web-interface/wbi/search/square?limit=20"
@@ -270,26 +256,27 @@ def get_hotlist_data(source):
             for item in res.get('items', [])[:10]:
                 title = item.get('full_name', 'unknown')
                 desc = item.get('description', '') or 'No description'
-                excerpt = smart_summary(desc, max_chars=62)
+                excerpt = short_summary(desc, max_chars=30)
                 items.append({"title": title, "excerpt": excerpt})
 
         if not items:
-            items = [{"title": "暂无热点数据", "excerpt": "请检查网络或稍后重试"}] * 3
+            items = [{"title": "暂无热点数据", "excerpt": "请检查网络或稍后重试"}] * 4
 
     except Exception as e:
         print(f"   ⚠️ 获取失败: {e}")
-        items = [{"title": "数据获取失败", "excerpt": "请检查网络或更换热搜源"}] * 3
+        items = [{"title": "数据获取失败", "excerpt": "请检查网络或更换热搜源"}] * 4
 
     return items
 
-# --- 任务：热搜看板（新版：每页3条，标题2行+简介2行，语义完整） ---
+# --- 任务：热搜看板（新版：每页4条，标题2行+简介1行） ---
 def task_hotlist(mac, enabled_pages, source, device_name):
     if "1" not in enabled_pages and "2" not in enabled_pages:
         return 0, 0
 
     source_map = {
-        "baidu": "百度热点",
+        "weibo": "微博热搜",
         "zhihu": "知乎热榜",
+        "baidu": "百度热点",
         "bilibili": "B站热搜",
         "github": "GitHub 热门"
     }
@@ -303,42 +290,50 @@ def task_hotlist(mac, enabled_pages, source, device_name):
 
         y = 48
         last_idx = start_idx
-        item_height = 83  # 3条 × 83 = 249，从y=48到y=297，底部留白3px
-        max_text_width = 340  # 400 - 序号区38 - 右边距12
+        item_height = 62  # 4条 × 62 = 248，从y=48到y=296，底部留白4px
 
         for i in range(start_idx, len(items)):
-            if y + 70 > 298:
+            if y + 55 > 298:
                 break
 
             current_num = i + 1
             item = items[i]
 
-            # 左侧序号黑底圆角框（高68px，适配双行标题+简介）
-            draw.rounded_rectangle([(10, y), (38, y + 68)], radius=6, fill=0)
+            # 左侧序号黑底圆角框（高50px）
+            draw.rounded_rectangle([(10, y), (38, y + 50)], radius=6, fill=0)
             num_x = 17 if current_num < 10 else 10
-            draw.text((num_x, y + 24), str(current_num), font=font_small, fill=255)
+            draw.text((num_x, y + 16), str(current_num), font=font_small, fill=255)
 
-            # 标题：18号字，最多2行，自动换行
-            title_lines = wrap_text_by_width(draw, item.get("title", ""), font_item, max_text_width)
-            title_lines = title_lines[:2]  # 最多2行
-            title_y = y + 3
+            # 标题：18号字，最多2行
+            title_lines = wrap_text_by_width(draw, item.get("title", ""), font_item, 340)
+            title_lines = title_lines[:2]
+            title_y = y + 2
             for line in title_lines:
                 draw.text((45, title_y), line, font=font_item, fill=0)
-                title_y += 22  # 18号字行高约22px
+                title_y += 22
 
-            # 简介：11号字，最多2行（已用smart_summary保证语义完整）
+            # 简介：11号字，固定1行（已用short_summary保证30字以内）
             excerpt = item.get("excerpt", "")
             if excerpt:
-                excerpt_lines = wrap_text_by_width(draw, excerpt, font_tiny, max_text_width)
-                excerpt_lines = excerpt_lines[:2]
-                excerpt_y = y + 3 + len(title_lines) * 22 + 4  # 标题下方留4px间距
-                for line in excerpt_lines:
-                    draw.text((45, excerpt_y), line, font=font_tiny, fill=0)
-                    excerpt_y += 13  # 11号字行高约13px
+                # 再次确保不超宽
+                truncated = ""
+                for char in excerpt:
+                    test = truncated + char
+                    try:
+                        w = draw.textlength(test, font=font_tiny)
+                    except:
+                        w = len(test) * 11
+                    if w > 340:
+                        truncated += "…"
+                        break
+                    truncated += char
+                # 简介放在标题下方，y + 2 + 行数*22 + 2
+                excerpt_y = y + 2 + len(title_lines) * 22 + 2
+                draw.text((45, excerpt_y), truncated, font=font_tiny, fill=0)
 
-            # 条目之间加细线分隔（除最后一条）
-            if i < start_idx + 2 and i < len(items) - 1:
-                line_y = y + item_height - 4
+            # 条目分隔线（除最后一条）
+            if i < start_idx + 3 and i < len(items) - 1:
+                line_y = y + item_height - 3
                 draw.line([(45, line_y), (390, line_y)], fill=0, width=1)
 
             y += item_height
@@ -350,16 +345,16 @@ def task_hotlist(mac, enabled_pages, source, device_name):
     next_s = 0
 
     if "1" in enabled_pages:
-        print(f"   生成 Page 1: 热点 (上 1-3)...")
+        print(f"   生成 Page 1: 热点 (上 1-4)...")
         img1 = Image.new('1', (400, 300), color=255)
         next_s = draw_list(ImageDraw.Draw(img1), f"◆ {title_display} (一)", items, 0)
         if push_image(img1, 1, mac, device_name):
             success_count += 1
 
     if "2" in enabled_pages:
-        print(f"   生成 Page 2: 热点 (下 4-6)...")
+        print(f"   生成 Page 2: 热点 (下 5-8)...")
         img2 = Image.new('1', (400, 300), color=255)
-        start_index = next_s if "1" in enabled_pages else 3
+        start_index = next_s if "1" in enabled_pages else 4
         draw_list(ImageDraw.Draw(img2), f"◆ {title_display} (二)", items, start_index)
         if push_image(img2, 2, mac, device_name):
             success_count += 1
@@ -578,7 +573,7 @@ if __name__ == "__main__":
 
         ok, total = 0, 0
 
-        s, t = task_hotlist(mac, pages, dev.get("hotlist_source", "baidu"), name)
+        s, t = task_hotlist(mac, pages, dev.get("hotlist_source", "weibo"), name)
         ok += s
         total += t
 
